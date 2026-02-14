@@ -163,8 +163,15 @@ ANSWER:"""
         # Step 2: Find relevant chunks
         results = self.vector_store.search(query_embedding, k=k)
 
+        # Filter out irrelevant results (high distance = poor match).
+        # If nothing passes the threshold, still send the best result
+        # so the LLM can decide to say "I don't know."
+        RELEVANCE_THRESHOLD = 1.2
+        relevant_results = [r for r in results if r["distance"] < RELEVANCE_THRESHOLD]
+        results_for_prompt = relevant_results or results[:1]
+
         # Step 3: Build the prompt
-        prompt = self.build_rag_prompt(question, results)
+        prompt = self.build_rag_prompt(question, results_for_prompt)
 
         # Step 4: Ask the LLM
         response = self.client.chat.completions.create(
@@ -184,21 +191,21 @@ ANSWER:"""
             description=f"RAG query: {question[:50]}",
         )
 
-        # Collect source info
+        # Only show relevant sources to the user (don't display irrelevant chunks)
         sources = []
-        for r in results:
+        for r in relevant_results:
             sources.append({
                 "source": r["metadata"].get("source", "unknown"),
                 "chunk_index": r["metadata"].get("chunk_index", -1),
                 "distance": r["distance"],
-                "preview": r["text"][:100] + "...",
+                "preview": r["text"],
             })
 
         return {
             "answer": answer,
             "sources": sources,
             "cost": cost,
-            "chunks_used": len(results),
+            "chunks_used": len(relevant_results),
         }
 
 
