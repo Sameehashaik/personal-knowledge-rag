@@ -4,6 +4,10 @@ A Retrieval-Augmented Generation (RAG) system built from scratch in Python. Uplo
 
 **Built as a learning project to deeply understand every component of the RAG pipeline.**
 
+## Demo
+
+![Demo](assets/Personal_knowledge_RAG_DEMO.gif)
+
 ## Architecture
 
 ```
