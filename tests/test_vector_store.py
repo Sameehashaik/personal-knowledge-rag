@@ -1,4 +1,4 @@
-"""Tests for the vector store module."""
+# test_vector_store.py — add, search, save/load with small 4-dim vectors (no API)
 
 import os
 import pytest
@@ -7,15 +7,13 @@ from src.vector_store import VectorStore
 
 
 def _make_random_embeddings(n: int, dim: int = 1536) -> list[list[float]]:
-    """Helper: generate random embeddings for testing (no API call needed)."""
+    """Random vectors for tests that don't care about meaning."""
     return np.random.rand(n, dim).astype(np.float32).tolist()
 
 
 class TestAddDocuments:
-    """Tests for adding documents to the store."""
 
     def test_add_single_document(self):
-        """Should store one document."""
         store = VectorStore(dimension=4)
         store.add_documents(
             texts=["Hello world"],
@@ -24,7 +22,6 @@ class TestAddDocuments:
         assert store.count == 1
 
     def test_add_multiple_documents(self):
-        """Should store multiple documents."""
         store = VectorStore(dimension=4)
         store.add_documents(
             texts=["Doc 1", "Doc 2", "Doc 3"],
@@ -33,7 +30,6 @@ class TestAddDocuments:
         assert store.count == 3
 
     def test_add_with_metadata(self):
-        """Should store metadata alongside documents."""
         store = VectorStore(dimension=4)
         store.add_documents(
             texts=["Hello"],
@@ -43,7 +39,6 @@ class TestAddDocuments:
         assert store.metadata[0]["source"] == "test.txt"
 
     def test_mismatched_lengths_raises(self):
-        """Should raise ValueError if texts and embeddings don't match."""
         store = VectorStore(dimension=4)
         with pytest.raises(ValueError, match="Mismatch"):
             store.add_documents(
@@ -53,10 +48,8 @@ class TestAddDocuments:
 
 
 class TestSearch:
-    """Tests for similarity search."""
 
     def test_search_returns_results(self):
-        """Should return search results."""
         store = VectorStore(dimension=4)
         store.add_documents(
             texts=["Doc A", "Doc B", "Doc C"],
@@ -66,7 +59,6 @@ class TestSearch:
         assert len(results) == 2
 
     def test_search_finds_most_similar(self):
-        """The closest vector should be ranked first."""
         store = VectorStore(dimension=4)
         store.add_documents(
             texts=["Exact match", "Somewhat close", "Very different"],
@@ -77,7 +69,7 @@ class TestSearch:
         assert results[0]["rank"] == 1
 
     def test_search_returns_distance(self):
-        """Results should include a distance score."""
+        # exact match should have distance ~0
         store = VectorStore(dimension=4)
         store.add_documents(
             texts=["Test"],
@@ -87,13 +79,12 @@ class TestSearch:
         assert results[0]["distance"] == pytest.approx(0.0, abs=1e-6)
 
     def test_search_empty_store(self):
-        """Searching an empty store should return empty list."""
         store = VectorStore(dimension=4)
         results = store.search([1, 0, 0, 0], k=3)
         assert results == []
 
     def test_k_larger_than_store(self):
-        """Requesting more results than documents should not crash."""
+        # asking for k=10 when there's only 1 doc should just return 1
         store = VectorStore(dimension=4)
         store.add_documents(
             texts=["Only one"],
@@ -104,13 +95,10 @@ class TestSearch:
 
 
 class TestSaveLoad:
-    """Tests for saving and loading the store."""
 
     def test_save_and_load(self, tmp_path):
-        """Should be able to save and reload the store."""
         filepath = str(tmp_path / "test_store")
 
-        # Create and save
         store = VectorStore(dimension=4)
         store.add_documents(
             texts=["Hello", "World"],
@@ -119,14 +107,13 @@ class TestSaveLoad:
         )
         store.save(filepath)
 
-        # Load into a new instance
         loaded = VectorStore.load(filepath)
         assert loaded.count == 2
         assert loaded.texts == ["Hello", "World"]
         assert loaded.metadata[0]["id"] == 1
 
     def test_loaded_store_searchable(self, tmp_path):
-        """A loaded store should still be searchable."""
+        # make sure the FAISS index actually works after round-tripping to disk
         filepath = str(tmp_path / "test_store")
 
         store = VectorStore(dimension=4)

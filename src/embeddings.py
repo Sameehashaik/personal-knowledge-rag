@@ -1,31 +1,26 @@
-"""
-Embeddings - Convert text into numerical vectors using OpenAI's API.
-
-This is the "magic translation" step: we turn human-readable text into
-lists of numbers (vectors) that capture the *meaning* of the text.
-Similar meanings → similar numbers → we can find relevant chunks by math.
-"""
+# embeddings.py
+# Turns text into 1536-dim vectors via OpenAI's embedding API.
+# Similar text -> nearby vectors -> that's how retrieval finds relevant chunks.
 
 import os
 from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# Add the project root to find cost_tracker
+# need project root on path so we can import cost_tracker
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from cost_tracker import CostTracker
 
-# Load API key from .env file
 load_dotenv()
 
-# Model we'll use: small, cheap, and good enough for RAG
+# text-embedding-3-small: cheap, fast, 1536 dims — good enough for this use case
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIMENSION = 1536
 
 
 def _get_client() -> OpenAI:
-    """Create an OpenAI client using the API key from environment."""
+    """Build an OpenAI client from the OPENAI_API_KEY env var."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError(
@@ -36,14 +31,8 @@ def _get_client() -> OpenAI:
 
 def generate_embedding(text: str, tracker: CostTracker = None) -> list[float]:
     """
-    Generate an embedding vector for a single piece of text.
-
-    Args:
-        text: The text to embed.
-        tracker: Optional CostTracker to log the API cost.
-
-    Returns:
-        A list of 1536 floats representing the text's meaning.
+    Embed a single string. Returns a 1536-float vector.
+    Pass a CostTracker to log the API spend.
     """
     client = _get_client()
 
@@ -54,7 +43,6 @@ def generate_embedding(text: str, tracker: CostTracker = None) -> list[float]:
 
     embedding = response.data[0].embedding
 
-    # Track the cost if a tracker was provided
     if tracker:
         tokens_used = response.usage.total_tokens
         tracker.track_call(
@@ -71,17 +59,8 @@ def generate_embeddings_batch(
     texts: list[str], tracker: CostTracker = None
 ) -> list[list[float]]:
     """
-    Generate embeddings for multiple texts in a single API call.
-
-    This is more efficient than calling generate_embedding() in a loop
-    because the API can process them all at once.
-
-    Args:
-        texts: List of texts to embed.
-        tracker: Optional CostTracker to log the API cost.
-
-    Returns:
-        A list of embedding vectors (one per input text).
+    Embed multiple texts in one API call — way cheaper than looping generate_embedding().
+    Returns one vector per input text in the same order.
     """
     if not texts:
         return []
@@ -95,7 +74,6 @@ def generate_embeddings_batch(
 
     embeddings = [item.embedding for item in response.data]
 
-    # Track the cost
     if tracker:
         tokens_used = response.usage.total_tokens
         tracker.track_call(
@@ -110,19 +88,9 @@ def generate_embeddings_batch(
 
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     """
-    Calculate cosine similarity between two vectors.
-
-    Returns a value between -1 and 1:
-      1.0 = identical meaning
-      0.0 = completely unrelated
-     -1.0 = opposite meaning
-
-    Args:
-        vec_a: First embedding vector.
-        vec_b: Second embedding vector.
-
-    Returns:
-        Cosine similarity score.
+    Cosine similarity between two vectors.
+    1.0 = same direction (same meaning), 0.0 = unrelated, -1.0 = opposite.
+    Returns 0.0 if either vector is all zeros.
     """
     dot_product = sum(a * b for a, b in zip(vec_a, vec_b))
     magnitude_a = sum(a * a for a in vec_a) ** 0.5
@@ -134,7 +102,7 @@ def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return dot_product / (magnitude_a * magnitude_b)
 
 
-# Demo when running directly
+# --- quick demo: embed 3 phrases and compare them ---
 if __name__ == "__main__":
     tracker = CostTracker(log_file="project1_costs.json")
 
@@ -145,7 +113,6 @@ if __name__ == "__main__":
 
     print(f"Each embedding has {len(embeddings[0])} dimensions\n")
 
-    # Show similarity scores
     print("Similarity scores:")
     for i in range(len(words)):
         for j in range(i + 1, len(words)):

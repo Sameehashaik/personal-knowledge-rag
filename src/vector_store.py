@@ -1,10 +1,6 @@
-"""
-Vector Store - Store and search embeddings using FAISS.
-
-This is the "database" of our RAG system. Instead of searching by keywords
-(like Google), it searches by *meaning*. You give it a question embedding,
-and it finds the chunks whose embeddings are closest in 1536-dimensional space.
-"""
+# vector_store.py
+# FAISS-backed vector DB — stores embeddings + original text + metadata side by side.
+# Searches by meaning (L2 distance in embedding space) instead of keywords.
 
 import json
 import numpy as np
@@ -14,24 +10,13 @@ from pathlib import Path
 
 class VectorStore:
     """
-    A vector database backed by FAISS for fast similarity search.
-
-    Stores three things together:
-    1. The embedding vectors (in FAISS index)
-    2. The original text chunks (so we can return readable results)
-    3. Metadata about each chunk (source file, chunk index, etc.)
+    Wraps a FAISS flat-L2 index with parallel lists for the chunk text and metadata.
+    save()/load() persist everything to a .faiss + .json file pair.
     """
 
     def __init__(self, dimension: int = 1536):
-        """
-        Initialize an empty vector store.
-
-        Args:
-            dimension: Size of each embedding vector (1536 for OpenAI small).
-        """
         self.dimension = dimension
-        # IndexFlatL2 = brute-force L2 (Euclidean) distance search
-        # Simple and exact — perfect for our scale (hundreds/thousands of chunks)
+        # brute-force L2 — exact results, fine up to ~10k chunks
         self.index = faiss.IndexFlatL2(dimension)
         self.texts: list[str] = []
         self.metadata: list[dict] = []
@@ -42,14 +27,7 @@ class VectorStore:
         embeddings: list[list[float]],
         metadata: list[dict] = None,
     ) -> None:
-        """
-        Add documents (chunks) to the vector store.
-
-        Args:
-            texts: The original text chunks.
-            embeddings: The embedding vectors for each chunk.
-            metadata: Optional metadata dicts for each chunk.
-        """
+        """Insert chunks + their vectors into the store. Metadata is optional."""
         if len(texts) != len(embeddings):
             raise ValueError(
                 f"Mismatch: {len(texts)} texts but {len(embeddings)} embeddings"
@@ -60,13 +38,10 @@ class VectorStore:
                 f"Mismatch: {len(texts)} texts but {len(metadata)} metadata entries"
             )
 
-        # Convert to numpy array — FAISS requires float32
+        # FAISS needs float32 numpy arrays
         vectors = np.array(embeddings, dtype=np.float32)
-
-        # Add vectors to the FAISS index
         self.index.add(vectors)
 
-        # Store the texts and metadata alongside
         self.texts.extend(texts)
         if metadata:
             self.metadata.extend(metadata)
@@ -75,31 +50,21 @@ class VectorStore:
 
     def search(self, query_embedding: list[float], k: int = 3) -> list[dict]:
         """
-        Find the k most similar chunks to a query.
-
-        Args:
-            query_embedding: The embedding vector of the query/question.
-            k: Number of results to return.
-
-        Returns:
-            List of dicts with keys: text, metadata, distance, rank.
-            Results are sorted by relevance (lowest distance = most similar).
+        Return the k nearest chunks to query_embedding.
+        Each result dict has: text, metadata, distance (L2), rank (1-indexed).
+        Lower distance = more relevant.
         """
         if self.index.ntotal == 0:
             return []
 
-        # Don't request more results than we have documents
-        k = min(k, self.index.ntotal)
+        k = min(k, self.index.ntotal)  # can't ask for more than we have
 
-        # Convert query to numpy array
         query_vector = np.array([query_embedding], dtype=np.float32)
-
-        # FAISS search returns distances and indices
         distances, indices = self.index.search(query_vector, k)
 
         results = []
         for rank, (dist, idx) in enumerate(zip(distances[0], indices[0])):
-            if idx == -1:  # FAISS returns -1 for empty slots
+            if idx == -1:  # FAISS pads with -1 when index is sparse
                 continue
             results.append({
                 "text": self.texts[idx],
@@ -112,24 +77,19 @@ class VectorStore:
 
     @property
     def count(self) -> int:
-        """Number of documents in the store."""
+        """How many vectors are in the index right now."""
         return self.index.ntotal
 
     def save(self, filepath: str) -> None:
         """
-        Save the vector store to disk (two files: .faiss + .json).
-
-        Args:
-            filepath: Base path (without extension). Creates:
-                      filepath.faiss — the FAISS index
-                      filepath.json  — the texts and metadata
+        Write to disk as two files:
+          <filepath>.faiss  — the FAISS index binary
+          <filepath>.json   — texts + metadata + dimension
         """
         path = Path(filepath)
 
-        # Save the FAISS index
         faiss.write_index(self.index, str(path.with_suffix(".faiss")))
 
-        # Save texts and metadata as JSON
         store_data = {
             "dimension": self.dimension,
             "texts": self.texts,
@@ -140,33 +100,21 @@ class VectorStore:
 
     @classmethod
     def load(cls, filepath: str) -> "VectorStore":
-        """
-        Load a vector store from disk.
-
-        Args:
-            filepath: Base path (without extension).
-
-        Returns:
-            A VectorStore with the saved data restored.
-        """
+        """Reconstruct a VectorStore from a .faiss + .json file pair."""
         path = Path(filepath)
 
-        # Load texts and metadata
         with open(path.with_suffix(".json"), "r", encoding="utf-8") as f:
             store_data = json.load(f)
 
-        # Create a new VectorStore and restore its state
         store = cls(dimension=store_data["dimension"])
         store.texts = store_data["texts"]
         store.metadata = store_data["metadata"]
-
-        # Load the FAISS index
         store.index = faiss.read_index(str(path.with_suffix(".faiss")))
 
         return store
 
 
-# Demo when running directly
+# --- quick demo: embed 5 chunks, store them, search ---
 if __name__ == "__main__":
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -175,7 +123,6 @@ if __name__ == "__main__":
 
     tracker = CostTracker(log_file="project1_costs.json")
 
-    # Create some sample chunks
     chunks = [
         "RAG stands for Retrieval-Augmented Generation. It combines LLMs with external knowledge.",
         "Embeddings are numerical representations of text. Similar meanings produce similar vectors.",
@@ -196,7 +143,6 @@ if __name__ == "__main__":
 
     print(f"Vector store has {store.count} documents\n")
 
-    # Search!
     query = "What is RAG?"
     print(f'Searching for: "{query}"\n')
     query_emb = generate_embedding(query, tracker=tracker)

@@ -1,15 +1,8 @@
-"""
-RAG Chain - The complete pipeline that ties everything together.
-
-This is the brain of the system. When a user asks a question:
-  1. Load & chunk the document        (document_loader + chunker)
-  2. Embed the chunks & store them    (embeddings + vector_store)
-  3. Embed the question               (embeddings)
-  4. Find relevant chunks             (vector_store.search)
-  5. Build a prompt with the chunks   (prompt engineering)
-  6. Ask the LLM to answer            (OpenAI chat API)
-  7. Return the answer with sources   (citation)
-"""
+# rag_chain.py
+# Ties the whole pipeline together:
+#   load file -> chunk -> embed -> store -> (user asks question) -> embed query
+#   -> vector search -> build prompt with relevant chunks -> LLM answers -> done
+# This is the only module the UI (app.py) needs to import.
 
 import os
 from pathlib import Path
@@ -27,22 +20,14 @@ from cost_tracker import CostTracker
 
 load_dotenv()
 
-# The LLM we'll use for answering questions
+# gpt-4o-mini for the chat completion (cheap and fast enough for RAG answers)
 CHAT_MODEL = "gpt-4o-mini"
 
 
 class RAGChain:
-    """
-    Complete RAG pipeline: ingest documents, answer questions with sources.
-    """
+    """Full ingest-and-query pipeline. Feed it docs, ask it questions."""
 
     def __init__(self, api_key: str = None):
-        """
-        Initialize the RAG chain.
-
-        Args:
-            api_key: OpenAI API key. If None, reads from OPENAI_API_KEY env var.
-        """
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError(
@@ -52,36 +37,26 @@ class RAGChain:
         self.client = OpenAI(api_key=self.api_key)
         self.vector_store = VectorStore(dimension=1536)
         self.tracker = CostTracker(log_file="project1_costs.json")
-        self.documents: list[str] = []  # Track which files have been added
+        self.documents: list[str] = []  # filenames we've ingested so far
 
     def add_document(self, file_path: str) -> dict:
         """
-        Ingest a document into the RAG system.
-
-        Steps: load -> chunk -> embed -> store
-
-        Args:
-            file_path: Path to a .txt or .pdf file.
-
-        Returns:
-            Summary dict with chunk count and file info.
+        Ingest one file: load -> chunk -> embed -> store.
+        Returns a summary dict (filename, chunk count, char count, total in store).
         """
-        # Step 1: Load the document
         text = load_document(file_path)
         filename = Path(file_path).name
 
-        # Step 2: Chunk the text
         chunks = chunk_text(text, chunk_size=1000, overlap=200)
         metadata_list = get_chunk_metadata(chunks)
 
-        # Add source filename to each chunk's metadata
+        # tag every chunk with its source file so we can cite it later
         for meta in metadata_list:
             meta["source"] = filename
 
-        # Step 3: Generate embeddings for all chunks (batch = efficient)
+        # batch embed is one API call instead of N
         embeddings = generate_embeddings_batch(chunks, tracker=self.tracker)
 
-        # Step 4: Store in vector database
         self.vector_store.add_documents(
             texts=chunks,
             embeddings=embeddings,
@@ -99,21 +74,9 @@ class RAGChain:
 
     def build_rag_prompt(self, question: str, chunks: list[dict]) -> str:
         """
-        Build the prompt that we send to the LLM.
-
-        This is where prompt engineering happens. We give the LLM:
-        - Clear instructions on how to behave
-        - The retrieved context chunks
-        - The user's question
-
-        Args:
-            question: The user's question.
-            chunks: Retrieved chunks from the vector store.
-
-        Returns:
-            The formatted prompt string.
+        Assemble the system prompt + retrieved context + user question.
+        The LLM is told to ONLY use context provided (no hallucinating).
         """
-        # Format the context chunks with source labels
         context_parts = []
         for i, chunk in enumerate(chunks, 1):
             source = chunk["metadata"].get("source", "unknown")
@@ -140,14 +103,8 @@ ANSWER:"""
 
     def query(self, question: str, k: int = 1) -> dict:
         """
-        Ask a question and get an answer based on stored documents.
-
-        Args:
-            question: The user's question.
-            k: Number of relevant chunks to retrieve.
-
-        Returns:
-            Dict with: answer, sources, cost, chunks_used.
+        End-to-end Q&A: embed the question, find nearest chunks,
+        build a prompt, call the LLM, return answer + sources + cost.
         """
         if self.vector_store.count == 0:
             return {
@@ -157,32 +114,25 @@ ANSWER:"""
                 "chunks_used": 0,
             }
 
-        # Step 1: Embed the question
         query_embedding = generate_embedding(question, tracker=self.tracker)
-
-        # Step 2: Find relevant chunks
         results = self.vector_store.search(query_embedding, k=k)
 
-        # Filter out irrelevant results (high distance = poor match).
-        # If nothing passes the threshold, still send the best result
-        # so the LLM can decide to say "I don't know."
+        # filter by distance — anything above 1.2 is probably noise;
+        # but always keep at least the top-1 so the LLM can say "I don't know"
         RELEVANCE_THRESHOLD = 1.2
         relevant_results = [r for r in results if r["distance"] < RELEVANCE_THRESHOLD]
         results_for_prompt = relevant_results or results[:1]
 
-        # Step 3: Build the prompt
         prompt = self.build_rag_prompt(question, results_for_prompt)
 
-        # Step 4: Ask the LLM
         response = self.client.chat.completions.create(
             model=CHAT_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,  # Low temperature = more focused/factual answers
+            temperature=0.3,  # low temp = more factual, less creative
         )
 
         answer = response.choices[0].message.content
 
-        # Track LLM cost
         usage = response.usage
         cost = self.tracker.track_call(
             model="gpt-4o-mini",
@@ -191,7 +141,7 @@ ANSWER:"""
             description=f"RAG query: {question[:50]}",
         )
 
-        # Only show relevant sources to the user (don't display irrelevant chunks)
+        # only surface chunks that actually passed the relevance filter
         sources = []
         for r in relevant_results:
             sources.append({
@@ -209,19 +159,17 @@ ANSWER:"""
         }
 
 
-# End-to-end demo
+# --- end-to-end demo ---
 if __name__ == "__main__":
     print("=== RAG Chain Demo ===\n")
 
     rag = RAGChain()
 
-    # Add our sample document
     sample_path = str(Path(__file__).parent.parent / "data" / "sample1.txt")
     print(f"Adding document: {sample_path}")
     summary = rag.add_document(sample_path)
     print(f"  -> {summary['chunks']} chunks from {summary['filename']}\n")
 
-    # Ask questions
     questions = [
         "What is RAG?",
         "How does cosine similarity work?",

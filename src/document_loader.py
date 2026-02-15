@@ -1,7 +1,6 @@
-"""
-Document Loader - Load and clean text from TXT and PDF files.
-This is the first step in the RAG pipeline: getting text INTO the system.
-"""
+# document_loader.py
+# Step 1 of the RAG pipeline: get raw text out of files (.txt, .pdf) and clean it up.
+# Everything downstream depends on this producing clean, readable text.
 
 from pathlib import Path
 from PyPDF2 import PdfReader
@@ -9,19 +8,7 @@ import re
 
 
 def load_txt(file_path: str) -> str:
-    """
-    Load text content from a .txt file.
-
-    Args:
-        file_path: Path to the text file.
-
-    Returns:
-        The raw text content of the file.
-
-    Raises:
-        FileNotFoundError: If the file doesn't exist.
-        ValueError: If the file is not a .txt file.
-    """
+    """Read a .txt file and return its raw content. Validates extension + existence first."""
     path = Path(file_path)
 
     if path.suffix.lower() != ".txt":
@@ -30,25 +17,13 @@ def load_txt(file_path: str) -> str:
     if not path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
 
-    # encoding='utf-8' ensures we handle special characters properly
+    # utf-8 so accented chars / special symbols don't break
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
 
 def load_pdf(file_path: str) -> str:
-    """
-    Load text content from a PDF file using PyPDF2.
-
-    Args:
-        file_path: Path to the PDF file.
-
-    Returns:
-        The extracted text from all pages.
-
-    Raises:
-        FileNotFoundError: If the file doesn't exist.
-        ValueError: If the file is not a .pdf file.
-    """
+    """Extract text from every page of a PDF using PyPDF2. Skips blank pages."""
     path = Path(file_path)
 
     if path.suffix.lower() != ".pdf":
@@ -70,25 +45,13 @@ def load_pdf(file_path: str) -> str:
 
 def clean_text(text: str) -> str:
     """
-    Clean extracted text by removing extra whitespace and artifacts.
-
-    Args:
-        text: Raw text to clean.
-
-    Returns:
-        Cleaned text.
+    Normalize whitespace so the chunker gets consistent input.
+    Collapses triple+ newlines, double+ spaces, and strips each line.
     """
-    # Replace multiple newlines with a single one
-    text = re.sub(r"\n{3,}", "\n\n", text)
-
-    # Replace multiple spaces with a single space
-    text = re.sub(r" {2,}", " ", text)
-
-    # Remove leading/trailing whitespace from each line
+    text = re.sub(r"\n{3,}", "\n\n", text)   # collapse excessive blank lines
+    text = re.sub(r" {2,}", " ", text)        # collapse runs of spaces
     lines = [line.strip() for line in text.splitlines()]
     text = "\n".join(lines)
-
-    # Remove leading/trailing whitespace from the whole text
     text = text.strip()
 
     return text
@@ -96,19 +59,8 @@ def clean_text(text: str) -> str:
 
 def load_document(file_path: str) -> str:
     """
-    Auto-detect file type and load the document.
-
-    This is the main entry point - it figures out whether you gave it
-    a TXT or PDF file and calls the right loader.
-
-    Args:
-        file_path: Path to a .txt or .pdf file.
-
-    Returns:
-        Cleaned text content of the document.
-
-    Raises:
-        ValueError: If the file type is not supported.
+    Main entry point — detects .txt vs .pdf, loads it, and returns cleaned text.
+    Raises ValueError for anything other than .txt / .pdf.
     """
     path = Path(file_path)
     suffix = path.suffix.lower()
@@ -125,7 +77,7 @@ def load_document(file_path: str) -> str:
     return clean_text(raw_text)
 
 
-# Quick test when running this file directly
+# --- quick manual test: python document_loader.py <file> ---
 if __name__ == "__main__":
     import sys
 
